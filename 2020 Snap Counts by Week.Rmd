@@ -1,0 +1,492 @@
+---
+title: "2020 Snap Counts by Week"
+author: "Jimmy Griffin"
+date: "11/23/2020"
+output: html_document
+---
+
+
+
+```{r Load Packages}
+
+# Clear all objects from current environment
+rm(list = ls())
+
+# General-purpose data wrangling
+library(tidyverse)
+
+# Parsing of HTML/XML files
+library(rvest)
+
+# Creating tables
+library(gt)
+
+# Load in sports team color schemes
+library(teamcolors)
+
+```
+
+
+
+```{r Scrape YTD Game Data}
+
+# Store the base URL
+YTD_games_url <- "http://www.pro-football-reference.com/years/2020/games.htm"
+
+# Scrape HTML content from stored base URL
+YTD_games_webpage <- read_html(YTD_games_url)
+
+# Create table of boxscore hyperlink extensions from webpage
+hyperlink_extension_df <- data.frame(hyperlink_extension = YTD_games_webpage %>%
+                   html_nodes(xpath = '//*[@id = "games"]/tbody/tr/td[7]/a') %>%
+                   html_attr("href"))
+
+# Scrape YTD game data from base webpage and add boxscore hyperlink extension column
+YTD_games_by_week <- YTD_games_webpage %>%
+  html_table() %>% # Parse HTML tables into data frames
+  .[[1]] %>% # Select HTML table 1
+  {setNames(.[, ], paste0(names(.), c("", "", "", "", "", "location_indicator", "", "game_status_indicator", "", "", "", "", "", "")))} %>% # Fix column names
+  filter(Week != "Week") %>% # Remove game week dividers
+  mutate("home_team" = if_else(location_indicator == "", .[, 5], .[, 7]),
+         "vis_team" = if_else(location_indicator != "", .[, 5], .[, 7])) %>% # Add "home team" and "visiting team" columns
+  cbind(hyperlink_extension_df) %>%
+  type_convert() %>% # Convert character columns to correct format
+  filter(game_status_indicator == "boxscore") # Filter to only show completed games
+
+# Preview YTD game data table
+head(YTD_games_by_week)
+
+```
+
+
+
+```{r Scrape Home Team Snap Counts}
+
+# Create list of boxscore hyperlink extensions for all games played YTD
+hyperlink_extension_list <- as.list(hyperlink_extension_df$hyperlink_extension)
+
+# Store blank data frames and base boxscore URL for function
+snap_count_table <- data.frame()
+home_snap_counts <- data.frame()
+base_boxscore_url <- "https://www.pro-football-reference.com"
+
+# Create YTD home team snap counts table
+for (i in seq_along(YTD_games_by_week$Week)) {
+  boxscore_webpage <- read_html(as.character(paste0(base_boxscore_url, hyperlink_extension_list[i]))) # Create boxscore webpage hyperlink and parse HTML
+  snap_count_table <- boxscore_webpage %>%
+    html_nodes(xpath = "//comment()") %>% # Select comment tag in HTML
+    html_text() %>% # Extract text from HTML
+    paste(collapse = "") %>% # Collapse string into one HTML block
+    read_html() %>% # Read HTML
+    html_node("table#home_snap_counts") %>% # Select home team snap counts table
+    html_table() %>% # Parse HTML table into data frame
+    {setNames(.[-1, ], paste0(names(.), .[1, ]))} %>% # Set column names by combining headers and first row of table
+    type_convert() # Convert character columns to correct format
+  snap_count_table["hyperlink_extension"] = hyperlink_extension_list[i] # Add column with boxscore hyperlink extension
+  home_snap_counts <- rbind(home_snap_counts, snap_count_table) # Bind current webpage's home team snap count table with existing collection of YTD home team snap counts
+}
+
+# Add YTD game data to home team snap count table
+home_snap_counts <- left_join(home_snap_counts, YTD_games_by_week, by = c("hyperlink_extension" = "hyperlink_extension"))
+
+# Load NFL team code and logo data
+nfl_logos <- read_csv("https://raw.githubusercontent.com/statsbylopez/BlogPosts/master/nfl_teamlogos.csv")
+
+# Add team and team code information for each player
+home_snap_counts$team <- nfl_logos$team[match(home_snap_counts$home_team, nfl_logos$team)]
+home_snap_counts$team_code <- nfl_logos$team_code[match(home_snap_counts$home_team, nfl_logos$team)]
+
+# Fix formatting of snap count percentage columns
+home_snap_counts$Off.Pct <- parse_number(home_snap_counts$Off.Pct)/100
+home_snap_counts$Def.Pct <- parse_number(home_snap_counts$Def.Pct)/100
+home_snap_counts$STPct <- parse_number(home_snap_counts$STPct)/100
+
+# Preview home team snap count data table
+head(home_snap_counts)
+
+```
+
+
+
+```{r Scrape Visiting Team Snap Counts}
+
+# Store blank data frames and base boxscore URL for function
+snap_count_table <- data.frame()
+vis_snap_counts <- data.frame()
+base_boxscore_url <- "https://www.pro-football-reference.com"
+
+# Create YTD visiting team snap counts table
+for (i in seq_along(YTD_games_by_week$Week)) {
+  boxscore_webpage <- read_html(as.character(paste0(base_boxscore_url, hyperlink_extension_list[i]))) # Create boxscore webpage hyperlink and parse HTML
+  snap_count_table <- boxscore_webpage %>%
+    html_nodes(xpath = "//comment()") %>% # Select comment tag in HTML
+    html_text() %>% # Extract text from HTML
+    paste(collapse = "") %>% # Collapse string into one HTML block
+    read_html() %>% # Read HTML
+    html_node("table#vis_snap_counts") %>% # Select visiting team snap counts table
+    html_table() %>% # Parse HTML table into data frame
+    {setNames(.[-1, ], paste0(names(.), .[1, ]))} %>% # Set column names by combining headers and first row of table
+    type_convert() # Convert character columns to correct format
+  snap_count_table["hyperlink_extension"] = hyperlink_extension_list[i] # Add column with boxscore hyperlink extension
+  vis_snap_counts <- rbind(vis_snap_counts, snap_count_table) # Bind current webpage's visiting team snap count table with existing collection of YTD visiting team snap counts
+}
+
+# Add YTD game data to visiting team snap count table
+vis_snap_counts <- left_join(vis_snap_counts, YTD_games_by_week, by = c("hyperlink_extension" = "hyperlink_extension"))
+
+# Add team and team code information for each player
+vis_snap_counts$team <- nfl_logos$team[match(vis_snap_counts$vis_team, nfl_logos$team)]
+vis_snap_counts$team_code <- nfl_logos$team_code[match(vis_snap_counts$vis_team, nfl_logos$team)]
+
+# Fix formatting of snap count percentage columns
+vis_snap_counts$Off.Pct <- parse_number(vis_snap_counts$Off.Pct)/100
+vis_snap_counts$Def.Pct <- parse_number(vis_snap_counts$Def.Pct)/100
+vis_snap_counts$STPct <- parse_number(vis_snap_counts$STPct)/100
+
+# Preview visiting team snap count data table
+head(vis_snap_counts)
+
+```
+
+
+
+```{r Create Master Snap Count Table and Positional Subset Pivot Tables}
+
+# Bind home team and visiting team snap count tables
+snap_counts <- rbind(home_snap_counts, vis_snap_counts)
+
+#Fix Malcolm Perry's position designation
+snap_counts$Pos[snap_counts$Player == "Malcolm Perry"] <- "WR"
+
+# Create Running Back snap count subset pivot table and sort first by most recent week and then by second most recent week
+RB_snap_counts <- snap_counts %>%
+  filter(Pos == "RB") %>% 
+  pivot_wider(id_cols = c(team, team_code, Player),
+              names_from = Week,
+              values_from = Off.Pct,
+              names_sort = TRUE) %>%
+  arrange(team, desc(.[, ncol(.)]), desc(.[, ncol(.)-1]))
+
+WR_snap_counts <- snap_counts %>%
+  filter(Pos == "WR") %>% 
+  pivot_wider(id_cols = c(team, team_code, Player),
+              names_from = Week,
+              values_from = Off.Pct,
+              names_sort = TRUE) %>%
+  arrange(team, desc(.[, ncol(.)]), desc(.[, ncol(.)-1]))
+
+TE_snap_counts <- snap_counts %>%
+  filter(Pos == "TE") %>% 
+  pivot_wider(id_cols = c(team, team_code, Player),
+              names_from = Week,
+              values_from = Off.Pct,
+              names_sort = TRUE) %>%
+  arrange(team, desc(.[, ncol(.)]), desc(.[, ncol(.)-1]))
+
+```
+
+
+
+```{r Create YTD Running Back Snap Count Table}
+
+# Create Running Back Snap Count gt object using gt package
+RB_gt_obj <- RB_snap_counts %>%
+  gt(rowname_col = "Player",
+     groupname_col = "team") %>%
+  tab_header(title = html(web_image(
+         url = "https://a.espncdn.com/combiner/i?img=/i/espn/misc_logos/500/nfl.png",
+         height = px(75)),
+         "<br> <strong> 2020 RB Snap Counts </strong>"),
+             subtitle = md(paste0("*Through Week ", names(RB_snap_counts[, ncol(RB_snap_counts)]), "*"))) %>%
+  tab_style(locations = cells_title(groups = "title"),
+            style = list(cell_fill(color = "#EDEDED"),
+                         cell_text(color = "#000000"))) %>%
+  tab_style(locations = cells_title(groups = "subtitle"),
+            style = list(cell_fill(color = "#EDEDED"),
+                         cell_borders(sides = "bottom",
+                                      color = "#000000",
+                                      style = "solid",
+                                      weight = px(2)))) %>%
+  cols_label(team_code = "") %>%
+  text_transform(locations = cells_body(vars(team_code)),
+                 fn = function(x) (web_image(url = ifelse(is.na(x), NA, paste0("https://a.espncdn.com/i/teamlogos/nfl/500/", x, ".png"))))) %>%
+  cols_width(vars(team_code) ~ px(50)) %>%
+  tab_spanner(label = "Week",
+              columns = 3:ncol(RB_snap_counts)) %>%
+  cols_align(align = "center") %>%
+  fmt_percent(columns = 3:ncol(RB_snap_counts),
+              decimals = 0) %>%
+  fmt_missing(columns = 3:ncol(RB_snap_counts),
+              missing_text = "-") %>%
+  tab_options(table.border.top.color = "#000000",
+              table.border.top.width = px(2),
+              column_labels.border.bottom.color = "#000000",
+              column_labels.border.bottom.width = px(2),
+              source_notes.background.color = "#EDEDED",
+              table.border.bottom.color = "#000000",
+              table.border.bottom.width = px(2),
+              row_group.padding = "10px") %>%
+  opt_table_font(font = c(google_font(name = "Chivo"),
+                          default_fonts())) %>%
+  tab_source_note(md("**Data:** Pro-Football-Reference.com <br> **Table:** Jimmy Griffin"))
+
+# Load in NFL team color data and fix the Raiders and Washington Football Team
+teamcolors <- teamcolors
+teamcolors$name[teamcolors$name == "Oakland Raiders"] <- "Las Vegas Raiders"
+teamcolors$name[teamcolors$name == "Washington Redskins"] <- "Washington Football Team"
+
+# Assign NFL team color codes to gt object's row group values
+RB_row_group_primary_colors <- teamcolors$primary[match(unique(RB_snap_counts$team), teamcolors$name)]
+RB_row_group_secondary_colors <- teamcolors$secondary[match(unique(RB_snap_counts$team), teamcolors$name)]
+RB_row_group_tertiary_colors <- replace_na(teamcolors$tertiary[match(unique(RB_snap_counts$team), teamcolors$name)], "#FFFFFF")
+
+# Assign NFL team color codes to gt object's stub group values
+RB_cells_stub_primary_colors <- teamcolors$primary[match(RB_snap_counts$team, teamcolors$name)]
+RB_cells_stub_secondary_colors <- teamcolors$secondary[match(RB_snap_counts$team, teamcolors$name)]
+RB_cells_stub_tertiary_colors <- replace_na(teamcolors$tertiary[match(RB_snap_counts$team, teamcolors$name)], "#FFFFFF")
+
+# Set colors for gt object's row groups
+for(i in seq_along(unique(RB_snap_counts$team))) {
+   RB_gt_obj <- RB_gt_obj %>%
+     tab_style(locations = cells_row_groups(groups = i),
+               style = list(cell_fill(color = RB_row_group_secondary_colors[i],
+                                      alpha = 1.0),
+                            cell_text(color = RB_row_group_primary_colors[i],
+                                      size = "large",
+                                      align = "center",
+                                      weight = "bold",
+                                      transform = "uppercase"),
+                            cell_borders(sides = c("top", "bottom"),
+                                         color = RB_row_group_primary_colors[i],
+                                         style = "solid",
+                                         weight = px(5))))
+}
+
+# Set colors for gt object's rows
+for(i in seq_along(RB_snap_counts$Player)) {
+   RB_gt_obj <- RB_gt_obj %>%
+     tab_style(locations = cells_stub(rows = i),
+               style = list(cell_fill(color = RB_cells_stub_primary_colors[i],
+                                      alpha = 0.7),
+                            cell_text(color = "#FFFFFF"),
+                            cell_borders(sides = c("right", "bottom"),
+                                         color = RB_cells_stub_tertiary_colors[i],
+                                         weight = px(2)))) %>%
+     tab_style(locations = cells_body(rows = i),
+               style = list(cell_fill(color = RB_cells_stub_tertiary_colors[i],
+                                      alpha = 0.2),
+                            cell_borders(sides = "bottom",
+                                         color = RB_cells_stub_tertiary_colors[i],
+                                         weight = px(2))))
+}
+
+# Save gt obj as HTML
+gtsave(RB_gt_obj, "2020 RB Snap Counts.html")
+
+# Display Running Back snap count table
+RB_gt_obj
+
+```
+
+
+
+```{r Create YTD Wide Receiver Snap Count Table}
+
+# Create Wide Receiver Snap Count gt object using gt package
+WR_gt_obj <- WR_snap_counts %>%
+  gt(rowname_col = "Player",
+     groupname_col = "team") %>%
+  tab_header(title = html(web_image(
+         url = "https://a.espncdn.com/combiner/i?img=/i/espn/misc_logos/500/nfl.png",
+         height = px(75)),
+         "<br> <strong> 2020 WR Snap Counts </strong>"),
+             subtitle = md(paste0("*Through Week ", names(WR_snap_counts[, ncol(WR_snap_counts)]), "*"))) %>%
+  tab_style(locations = cells_title(groups = "title"),
+            style = list(cell_fill(color = "#EDEDED"),
+                         cell_text(color = "#000000"))) %>%
+  tab_style(locations = cells_title(groups = "subtitle"),
+            style = list(cell_fill(color = "#EDEDED"),
+                         cell_borders(sides = "bottom",
+                                      color = "#000000",
+                                      style = "solid",
+                                      weight = px(2)))) %>%
+  cols_label(team_code = "") %>%
+  text_transform(locations = cells_body(vars(team_code)),
+                 fn = function(x) (web_image(url = ifelse(is.na(x), NA, paste0("https://a.espncdn.com/i/teamlogos/nfl/500/", x, ".png"))))) %>%
+  cols_width(vars(team_code) ~ px(50)) %>%
+  tab_spanner(label = "Week",
+              columns = 3:ncol(WR_snap_counts)) %>%
+  cols_align(align = "center") %>%
+  fmt_percent(columns = 3:ncol(WR_snap_counts),
+              decimals = 0) %>%
+  fmt_missing(columns = 3:ncol(WR_snap_counts),
+              missing_text = "-") %>%
+  tab_options(table.border.top.color = "#000000",
+              table.border.top.width = px(2),
+              column_labels.border.bottom.color = "#000000",
+              column_labels.border.bottom.width = px(2),
+              source_notes.background.color = "#EDEDED",
+              table.border.bottom.color = "#000000",
+              table.border.bottom.width = px(2),
+              row_group.padding = "10px") %>%
+  opt_table_font(font = c(google_font(name = "Chivo"),
+                          default_fonts())) %>%
+  tab_source_note(md("**Data:** Pro-Football-Reference.com <br> **Table:** Jimmy Griffin"))
+
+# Assign NFL team color codes to gt object's row group values
+WR_row_group_primary_colors <- teamcolors$primary[match(unique(WR_snap_counts$team), teamcolors$name)]
+WR_row_group_secondary_colors <- teamcolors$secondary[match(unique(WR_snap_counts$team), teamcolors$name)]
+WR_row_group_tertiary_colors <- replace_na(teamcolors$tertiary[match(unique(WR_snap_counts$team), teamcolors$name)], "#FFFFFF")
+
+# Assign NFL team color codes to gt object's stub group values
+WR_cells_stub_primary_colors <- teamcolors$primary[match(WR_snap_counts$team, teamcolors$name)]
+WR_cells_stub_secondary_colors <- teamcolors$secondary[match(WR_snap_counts$team, teamcolors$name)]
+WR_cells_stub_tertiary_colors <- replace_na(teamcolors$tertiary[match(WR_snap_counts$team, teamcolors$name)], "#FFFFFF")
+
+# Set colors for gt object's row groups
+for(i in seq_along(unique(WR_snap_counts$team))) {
+   WR_gt_obj <- WR_gt_obj %>%
+     tab_style(locations = cells_row_groups(groups = i),
+               style = list(cell_fill(color = WR_row_group_secondary_colors[i],
+                                      alpha = 1.0),
+                            cell_text(color = WR_row_group_primary_colors[i],
+                                      size = "large",
+                                      align = "center",
+                                      weight = "bold",
+                                      transform = "uppercase"),
+                            cell_borders(sides = c("top", "bottom"),
+                                         color = WR_row_group_primary_colors[i],
+                                         style = "solid",
+                                         weight = px(5))))
+}
+
+# Set colors for gt object's rows
+for(i in seq_along(WR_snap_counts$Player)) {
+   WR_gt_obj <- WR_gt_obj %>%
+     tab_style(locations = cells_stub(rows = i),
+               style = list(cell_fill(color = WR_cells_stub_primary_colors[i],
+                                      alpha = 0.7),
+                            cell_text(color = "#FFFFFF"),
+                            cell_borders(sides = c("right", "bottom"),
+                                         color = WR_cells_stub_tertiary_colors[i],
+                                         weight = px(2)))) %>%
+     tab_style(locations = cells_body(rows = i),
+               style = list(cell_fill(color = WR_cells_stub_tertiary_colors[i],
+                                      alpha = 0.2),
+                            cell_borders(sides = "bottom",
+                                         color = WR_cells_stub_tertiary_colors[i],
+                                         weight = px(2))))
+}
+
+# Save gt obj as HTML
+gtsave(WR_gt_obj, "2020 WR Snap Counts.html")
+
+# Display Wide Receiver snap count table
+WR_gt_obj
+
+```
+
+
+
+```{r Create YTD Tight End Snap Count Table}
+
+# Create Tight End Snap Count gt object using gt package
+TE_gt_obj <- TE_snap_counts %>%
+  gt(rowname_col = "Player",
+     groupname_col = "team") %>%
+  tab_header(title = html(web_image(
+         url = "https://a.espncdn.com/combiner/i?img=/i/espn/misc_logos/500/nfl.png",
+         height = px(75)),
+         "<br> <strong> 2020 TE Snap Counts </strong>"),
+             subtitle = md(paste0("*Through Week ", names(TE_snap_counts[, ncol(TE_snap_counts)]), "*"))) %>%
+  tab_style(locations = cells_title(groups = "title"),
+            style = list(cell_fill(color = "#EDEDED"),
+                         cell_text(color = "#000000"))) %>%
+  tab_style(locations = cells_title(groups = "subtitle"),
+            style = list(cell_fill(color = "#EDEDED"),
+                         cell_borders(sides = "bottom",
+                                      color = "#000000",
+                                      style = "solid",
+                                      weight = px(2)))) %>%
+  cols_label(team_code = "") %>%
+  text_transform(locations = cells_body(vars(team_code)),
+                 fn = function(x) (web_image(url = ifelse(is.na(x), NA, paste0("https://a.espncdn.com/i/teamlogos/nfl/500/", x, ".png"))))) %>%
+  cols_width(vars(team_code) ~ px(50)) %>%
+  tab_spanner(label = "Week",
+              columns = 3:ncol(TE_snap_counts)) %>%
+  cols_align(align = "center") %>%
+  fmt_percent(columns = 3:ncol(TE_snap_counts),
+              decimals = 0) %>%
+  fmt_missing(columns = 3:ncol(TE_snap_counts),
+              missing_text = "-") %>%
+  tab_options(table.border.top.color = "#000000",
+              table.border.top.width = px(2),
+              column_labels.border.bottom.color = "#000000",
+              column_labels.border.bottom.width = px(2),
+              source_notes.background.color = "#EDEDED",
+              table.border.bottom.color = "#000000",
+              table.border.bottom.width = px(2),
+              row_group.padding = "10px") %>%
+  opt_table_font(font = c(google_font(name = "Chivo"),
+                          default_fonts())) %>%
+  tab_source_note(md("**Data:** Pro-Football-Reference.com <br> **Table:** Jimmy Griffin"))
+
+# Assign NFL team color codes to gt object's row group values
+TE_row_group_primary_colors <- teamcolors$primary[match(unique(TE_snap_counts$team), teamcolors$name)]
+TE_row_group_secondary_colors <- teamcolors$secondary[match(unique(TE_snap_counts$team), teamcolors$name)]
+TE_row_group_tertiary_colors <- replace_na(teamcolors$tertiary[match(unique(TE_snap_counts$team), teamcolors$name)], "#FFFFFF")
+
+# Assign NFL team color codes to gt object's stub group values
+TE_cells_stub_primary_colors <- teamcolors$primary[match(TE_snap_counts$team, teamcolors$name)]
+TE_cells_stub_secondary_colors <- teamcolors$secondary[match(TE_snap_counts$team, teamcolors$name)]
+TE_cells_stub_tertiary_colors <- replace_na(teamcolors$tertiary[match(TE_snap_counts$team, teamcolors$name)], "#FFFFFF")
+
+# Set colors for gt object's row groups
+for(i in seq_along(unique(TE_snap_counts$team))) {
+   TE_gt_obj <- TE_gt_obj %>%
+     tab_style(locations = cells_row_groups(groups = i),
+               style = list(cell_fill(color = TE_row_group_secondary_colors[i],
+                                      alpha = 1.0),
+                            cell_text(color = TE_row_group_primary_colors[i],
+                                      size = "large",
+                                      align = "center",
+                                      weight = "bold",
+                                      transform = "uppercase"),
+                            cell_borders(sides = c("top", "bottom"),
+                                         color = TE_row_group_primary_colors[i],
+                                         style = "solid",
+                                         weight = px(5))))
+}
+
+# Set colors for gt object's rows
+for(i in seq_along(TE_snap_counts$Player)) {
+   TE_gt_obj <- TE_gt_obj %>%
+     tab_style(locations = cells_stub(rows = i),
+               style = list(cell_fill(color = TE_cells_stub_primary_colors[i],
+                                      alpha = 0.7),
+                            cell_text(color = "#FFFFFF"),
+                            cell_borders(sides = c("right", "bottom"),
+                                         color = TE_cells_stub_tertiary_colors[i],
+                                         weight = px(2)))) %>%
+     tab_style(locations = cells_body(rows = i),
+               style = list(cell_fill(color = TE_cells_stub_tertiary_colors[i],
+                                      alpha = 0.2),
+                            cell_borders(sides = "bottom",
+                                         color = TE_cells_stub_tertiary_colors[i],
+                                         weight = px(2))))
+}
+
+# Save gt obj as HTML
+gtsave(TE_gt_obj, "2020 TE Snap Counts.html")
+
+# Display Tight End snap count table
+TE_gt_obj
+
+```
+
+
+
+# Notes for Future Changes
+
+-   Can this same code be used to pull number of targets/target share? Will need to look at how to pull the "Offense" table on the boxscore pages ("offense_table <- as.data.frame(test_webpage %>% html_nodes(xpath = '//*[@id="player_offense"]') %>% html_table())").
+-   Read "vignette(pivot)" for more information on pivot tables in R.
